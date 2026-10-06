@@ -10,6 +10,7 @@
 #include "proxy.h"
 #include "http.h"
 #include "logger.h"
+#include "tunnel.h"
 
 static double now_ms(void) {
     struct timespec ts;
@@ -18,7 +19,7 @@ static double now_ms(void) {
 }
 
 /* Open a TCP connection to the origin server. Returns fd or -1. */
-static int connect_to_host(const char *host, int port) {
+int connect_to_host(const char *host, int port) {
     char portstr[16];
     snprintf(portstr, sizeof portstr, "%d", port);
 
@@ -124,7 +125,7 @@ void handle_client(int client_fd, const char *client_ip) {
         return;
     }
     if (strcmp(method, "CONNECT") == 0) {
-        send_error(client_fd, 501, "CONNECT not implemented yet");
+        handle_connect(client_fd, client_ip, url);
         return;
     }
 
