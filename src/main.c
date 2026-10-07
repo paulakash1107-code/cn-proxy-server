@@ -7,17 +7,26 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include "proxy.h"
+#include "http.h"
+
+#define MAX_CLIENTS 200   /* simultaneous connections; beyond this we answer 503 */
 
 typedef struct {
     int fd;
     char ip[INET_ADDRSTRLEN];
 } client_t;
 
+static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
+static int active_clients = 0;
+
 static void *thread_main(void *arg) {
     client_t *c = arg;
     handle_client(c->fd, c->ip);
     close(c->fd);
     free(c);
+    pthread_mutex_lock(&active_lock);
+    active_clients--;
+    pthread_mutex_unlock(&active_lock);
     return NULL;
 }
 
@@ -50,13 +59,32 @@ int main(int argc, char **argv) {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 
+        pthread_mutex_lock(&active_lock);
+        int full = active_clients >= MAX_CLIENTS;
+        if (!full) active_clients++;
+        pthread_mutex_unlock(&active_lock);
+        if (full) {                       /* overloaded: refuse politely instead of crashing */
+            send_error(fd, 503, "Service Unavailable");
+            close(fd);
+            continue;
+        }
+
         client_t *c = malloc(sizeof *c);
-        if (!c) { close(fd); continue; }
+        if (!c) {
+            pthread_mutex_lock(&active_lock); active_clients--; pthread_mutex_unlock(&active_lock);
+            close(fd);
+            continue;
+        }
         c->fd = fd;
         inet_ntop(AF_INET, &ca.sin_addr, c->ip, sizeof c->ip);
 
         pthread_t t;
-        if (pthread_create(&t, NULL, thread_main, c) == 0) pthread_detach(t);
-        else { close(fd); free(c); }
+        if (pthread_create(&t, NULL, thread_main, c) == 0) {
+            pthread_detach(t);
+        } else {
+            pthread_mutex_lock(&active_lock); active_clients--; pthread_mutex_unlock(&active_lock);
+            close(fd);
+            free(c);
+        }
     }
 }
