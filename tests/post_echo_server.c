@@ -65,7 +65,7 @@ int main(void) {
     a.sin_addr.s_addr = INADDR_ANY;
     a.sin_port = htons(9001);
     if (bind(srv, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
-    listen(srv, 16);
+    listen(srv, 128);
     printf("echo server on port 9001\n");
     for (;;) {
         int fd = accept(srv, NULL, NULL);
