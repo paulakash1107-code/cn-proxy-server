@@ -3,6 +3,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <time.h>
 #include <netdb.h>
@@ -11,6 +12,12 @@
 #include "http.h"
 #include "logger.h"
 #include "tunnel.h"
+#include "access.h"
+#include "cache.h"
+
+#define MAX_BODY (10L * 1024 * 1024)          /* refuse request bodies over 10 MB */
+#define CACHE_MAX_ENTRY (2UL * 1024 * 1024)   /* don't cache responses over 2 MB */
+#define CACHE_DEFAULT_TTL 60                  /* seconds, when the server gives no hint */
 
 static double now_ms(void) {
     struct timespec ts;
@@ -90,30 +97,6 @@ static int build_origin_request(char *out, size_t cap, const char *method, const
     return off + w;
 }
 
-/* Copy the origin's response to the client. Returns bytes relayed, sets *status. */
-static size_t relay_response(int ofd, int cfd, int *status) {
-    char buf[8192];
-    size_t total = 0;
-    int first = 1;
-    *status = 0;
-
-    for (;;) {
-        ssize_t n = recv(ofd, buf, sizeof buf - 1, 0);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;                       /* origin closed, error, or timeout */
-        if (first) {
-            first = 0;
-            buf[n] = '\0';
-            if (sscanf(buf, "HTTP/%*s %d", status) != 1) *status = 0;
-        }
-        if (send_all(cfd, buf, (size_t)n) < 0) break;   /* client went away */
-        total += (size_t)n;
-    }
-    return total;
-}
-
-#define MAX_BODY (10L * 1024 * 1024)   /* refuse request bodies over 10 MB */
-
 /* Returns a pointer to the value of header `name`, or NULL if absent. */
 static const char *find_header(const char *req, const char *name) {
     size_t nl = strlen(name);
@@ -140,6 +123,72 @@ static long get_content_length(const char *req) {
     return c;
 }
 
+/* How long may this response be cached? Returns seconds, 0 = do not cache. */
+static long response_ttl(const char *resp) {
+    const char *cc = find_header(resp, "Cache-Control");
+    if (cc) {
+        const char *eol = strstr(cc, "\r\n");
+        size_t len = eol ? (size_t)(eol - cc) : strlen(cc);
+        char line[256];
+        if (len >= sizeof line) len = sizeof line - 1;
+        memcpy(line, cc, len);
+        line[len] = '\0';
+        for (char *q = line; *q; q++) *q = (char)tolower((unsigned char)*q);
+        if (strstr(line, "no-store") || strstr(line, "private") || strstr(line, "no-cache"))
+            return 0;
+        char *m = strstr(line, "max-age=");
+        if (m) return atol(m + 8);               /* max-age=0 -> 0 -> not cached */
+    }
+    return CACHE_DEFAULT_TTL;
+}
+
+/* Copy the ETag header value (if any) into out. */
+static void response_etag(const char *resp, char *out, size_t cap) {
+    out[0] = '\0';
+    const char *v = find_header(resp, "ETag");
+    if (!v) return;
+    while (*v == ' ') v++;
+    const char *eol = strstr(v, "\r\n");
+    size_t len = eol ? (size_t)(eol - v) : strlen(v);
+    if (len >= cap) len = cap - 1;
+    memcpy(out, v, len);
+    out[len] = '\0';
+}
+
+/* Copy the origin's response to the client, keeping a copy (up to the size cap)
+   for the cache. Returns bytes relayed. */
+static size_t relay_response(int ofd, int cfd, int *status,
+                             char **cap, size_t *caplen, int *capok, int *complete) {
+    char buf[8192];
+    size_t total = 0;
+    int first = 1;
+    *status = 0;
+
+    for (;;) {
+        ssize_t n = recv(ofd, buf, sizeof buf - 1, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n == 0) *complete = 1;               /* origin closed cleanly = full response */
+        if (n <= 0) break;                       /* closed, error or timeout */
+        if (first) {
+            first = 0;
+            buf[n] = '\0';
+            if (sscanf(buf, "HTTP/%*s %d", status) != 1) *status = 0;
+        }
+        if (*capok) {
+            if (*caplen + (size_t)n > CACHE_MAX_ENTRY) {
+                *capok = 0; free(*cap); *cap = NULL; *caplen = 0;
+            } else {
+                char *tmp = realloc(*cap, *caplen + (size_t)n);
+                if (!tmp) { *capok = 0; free(*cap); *cap = NULL; *caplen = 0; }
+                else { *cap = tmp; memcpy(*cap + *caplen, buf, (size_t)n); *caplen += (size_t)n; }
+            }
+        }
+        if (send_all(cfd, buf, (size_t)n) < 0) break;   /* client went away */
+        total += (size_t)n;
+    }
+    return total;
+}
+
 void handle_client(int client_fd, const char *client_ip) {
     double t0 = now_ms();
     char buf[8192];
@@ -163,6 +212,32 @@ void handle_client(int client_fd, const char *client_ip) {
         send_error(client_fd, 400, "Bad Request");
         log_request(client_ip, method, url, 400, 0, "-", now_ms() - t0);
         return;
+    }
+
+    /* Access control: blocklist / rate limit. */
+    int astatus = 403;
+    if (!access_check(client_ip, host, &astatus)) {
+        send_error(client_fd, astatus, astatus == 429 ? "Too Many Requests" : "Forbidden");
+        log_request(client_ip, method, url, astatus, 0, "BLOCKED", now_ms() - t0);
+        return;
+    }
+
+    /* Cache lookup: only plain GET requests without credentials or ranges. */
+    int cacheable_req = strcmp(method, "GET") == 0
+                        && !find_header(buf, "Authorization")
+                        && !find_header(buf, "Range");
+    if (cacheable_req) {
+        char *cached = NULL;
+        size_t cached_len = 0;
+        char etag[128] = "";
+        int cr = cache_get(url, &cached, &cached_len, etag);
+        if (cr == 1) {                           /* fresh hit: no trip to the origin */
+            send_all(client_fd, cached, cached_len);
+            free(cached);
+            log_request(client_ip, method, url, 200, cached_len, "HIT", now_ms() - t0);
+            return;
+        }
+        if (cr == 2) free(cached);               /* stale: treated as a miss for now */
     }
 
     long clen = get_content_length(buf);
@@ -231,12 +306,31 @@ void handle_client(int client_fd, const char *client_ip) {
     }
 
     int status;
-    size_t bytes = relay_response(ofd, client_fd, &status);
+    char *cap = NULL;
+    size_t caplen = 0;
+    int capok = cacheable_req, complete = 0;
+    size_t bytes = relay_response(ofd, client_fd, &status, &cap, &caplen, &capok, &complete);
     close(ofd);
 
     if (bytes == 0) {                            /* origin sent nothing: timeout or reset */
         send_error(client_fd, 504, "Gateway Timeout");
         status = 504;
     }
+
+    /* Store in the cache only complete, successful, cacheable responses. */
+    if (capok && complete && status == 200 && cap && caplen > 0) {
+        char *tmp = realloc(cap, caplen + 1);
+        if (tmp) {
+            cap = tmp;
+            cap[caplen] = '\0';                  /* so header parsing can use string functions */
+            long ttl = response_ttl(cap);
+            if (ttl > 0 && !find_header(cap, "Set-Cookie")) {
+                char etag[128];
+                response_etag(cap, etag, sizeof etag);
+                cache_put(url, cap, caplen, (time_t)ttl, etag);
+            }
+        }
+    }
+    free(cap);
     log_request(client_ip, method, url, status, bytes, "MISS", now_ms() - t0);
 }
