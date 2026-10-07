@@ -18,6 +18,12 @@ typedef struct {
 
 static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
 static int active_clients = 0;
+static volatile sig_atomic_t stop = 0;
+
+static void on_sigint(int sig) {
+    (void)sig;
+    stop = 1;                       /* accept() is interrupted, loop ends, program exits cleanly */
+}
 
 static void *thread_main(void *arg) {
     client_t *c = arg;
@@ -32,7 +38,13 @@ static void *thread_main(void *arg) {
 
 int main(int argc, char **argv) {
     int port = argc > 1 ? atoi(argv[1]) : 8888;
-    signal(SIGPIPE, SIG_IGN);   /* don't die when a client disconnects mid-send */
+    signal(SIGPIPE, SIG_IGN);       /* don't die when a client disconnects mid-send */
+
+    struct sigaction sa;            /* no SA_RESTART, so accept() returns when Ctrl+C is pressed */
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigint;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     int srv = socket(AF_INET, SOCK_STREAM, 0);
     if (srv < 0) { perror("socket"); return 1; }
@@ -49,11 +61,11 @@ int main(int argc, char **argv) {
     if (listen(srv, 128) < 0) { perror("listen"); return 1; }
     printf("Proxy listening on port %d\n", port);
 
-    for (;;) {
+    while (!stop) {
         struct sockaddr_in ca;
         socklen_t len = sizeof ca;
         int fd = accept(srv, (struct sockaddr *)&ca, &len);
-        if (fd < 0) continue;
+        if (fd < 0) continue;       /* EINTR on Ctrl+C: loop condition ends the server */
 
         struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };   /* no thread hangs forever */
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -63,7 +75,7 @@ int main(int argc, char **argv) {
         int full = active_clients >= MAX_CLIENTS;
         if (!full) active_clients++;
         pthread_mutex_unlock(&active_lock);
-        if (full) {                       /* overloaded: refuse politely instead of crashing */
+        if (full) {                 /* overloaded: refuse politely instead of crashing */
             send_error(fd, 503, "Service Unavailable");
             close(fd);
             continue;
@@ -87,4 +99,8 @@ int main(int argc, char **argv) {
             free(c);
         }
     }
+
+    printf("\nShutting down...\n");
+    close(srv);
+    return 0;
 }
