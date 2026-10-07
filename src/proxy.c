@@ -193,6 +193,11 @@ void handle_client(int client_fd, const char *client_ip) {
     double t0 = now_ms();
     char buf[8192];
     int n = read_headers(client_fd, buf, sizeof buf);
+    if (n == -2) {
+        send_error(client_fd, 431, "Request Header Fields Too Large");
+        log_request(client_ip, "-", "-", 431, 0, "-", now_ms() - t0);
+        return;
+    }
     if (n <= 0) return;
 
     char method[16], url[2048], version[16];

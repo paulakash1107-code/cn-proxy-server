@@ -16,7 +16,7 @@ int read_headers(int fd, char *buf, size_t cap) {
         buf[total] = '\0';
         if (strstr(buf, "\r\n\r\n")) return (int)total;
     }
-    return -1;                              /* headers too large */
+    return -2;  /* headers too large */
 }
 
 /* "http://host:port/path" -> host, port, path */
