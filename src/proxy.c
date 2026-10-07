@@ -48,7 +48,7 @@ int connect_to_host(const char *host, int port) {
 static int skip_header(const char *line) {
     static const char *skip[] = {
         "Host:", "Proxy-Connection:", "Connection:", "Keep-Alive:",
-        "Proxy-Authorization:", "TE:", "Upgrade:", "Accept-Encoding:", NULL
+        "Proxy-Authorization:", "TE:", "Upgrade:", "Accept-Encoding:", "Expect:", NULL
     };
     for (int i = 0; skip[i]; i++)
         if (strncasecmp(line, skip[i], strlen(skip[i])) == 0) return 1;
@@ -112,6 +112,34 @@ static size_t relay_response(int ofd, int cfd, int *status) {
     return total;
 }
 
+#define MAX_BODY (10L * 1024 * 1024)   /* refuse request bodies over 10 MB */
+
+/* Returns a pointer to the value of header `name`, or NULL if absent. */
+static const char *find_header(const char *req, const char *name) {
+    size_t nl = strlen(name);
+    const char *end = strstr(req, "\r\n\r\n");
+    const char *p = strstr(req, "\r\n");
+    if (!p || !end) return NULL;
+    p += 2;
+    while (p < end) {
+        if (strncasecmp(p, name, nl) == 0 && p[nl] == ':') return p + nl + 1;
+        const char *eol = strstr(p, "\r\n");
+        if (!eol) break;
+        p = eol + 2;
+    }
+    return NULL;
+}
+
+/* Content-Length of the request: 0 if absent, -1 if invalid. */
+static long get_content_length(const char *req) {
+    const char *v = find_header(req, "Content-Length");
+    if (!v) return 0;
+    char *endp;
+    long c = strtol(v, &endp, 10);
+    if (endp == v || c < 0) return -1;
+    return c;
+}
+
 void handle_client(int client_fd, const char *client_ip) {
     double t0 = now_ms();
     char buf[8192];
@@ -137,6 +165,23 @@ void handle_client(int client_fd, const char *client_ip) {
         return;
     }
 
+    long clen = get_content_length(buf);
+    if (clen < 0) {
+        send_error(client_fd, 400, "Bad Request");
+        log_request(client_ip, method, url, 400, 0, "-", now_ms() - t0);
+        return;
+    }
+    if (clen > MAX_BODY) {
+        send_error(client_fd, 413, "Payload Too Large");
+        log_request(client_ip, method, url, 413, 0, "-", now_ms() - t0);
+        return;
+    }
+    if (find_header(buf, "Transfer-Encoding")) {   /* chunked request bodies: not supported */
+        send_error(client_fd, 501, "Not Implemented");
+        log_request(client_ip, method, url, 501, 0, "-", now_ms() - t0);
+        return;
+    }
+
     int ofd = connect_to_host(host, port);
     if (ofd < 0) {
         send_error(client_fd, 502, "Bad Gateway");
@@ -151,6 +196,38 @@ void handle_client(int client_fd, const char *client_ip) {
         send_error(client_fd, 502, "Bad Gateway");
         log_request(client_ip, method, url, 502, 0, "-", now_ms() - t0);
         return;
+    }
+
+    /* Forward the request body (POST/PUT), if any. */
+    if (clen > 0) {
+        const char *body_start = strstr(buf, "\r\n\r\n") + 4;
+        long already = n - (long)(body_start - buf);   /* body bytes read together with headers */
+        if (already > clen) already = clen;
+        if (already > 0 && send_all(ofd, body_start, (size_t)already) < 0) {
+            close(ofd);
+            send_error(client_fd, 502, "Bad Gateway");
+            log_request(client_ip, method, url, 502, 0, "-", now_ms() - t0);
+            return;
+        }
+        long remaining = clen - (already > 0 ? already : 0);
+        char bb[8192];
+        while (remaining > 0) {
+            size_t want = remaining > (long)sizeof bb ? sizeof bb : (size_t)remaining;
+            ssize_t r = recv(client_fd, bb, want, 0);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) {                              /* client vanished mid-upload */
+                close(ofd);
+                log_request(client_ip, method, url, 400, 0, "-", now_ms() - t0);
+                return;
+            }
+            if (send_all(ofd, bb, (size_t)r) < 0) {
+                close(ofd);
+                send_error(client_fd, 502, "Bad Gateway");
+                log_request(client_ip, method, url, 502, 0, "-", now_ms() - t0);
+                return;
+            }
+            remaining -= r;
+        }
     }
 
     int status;
