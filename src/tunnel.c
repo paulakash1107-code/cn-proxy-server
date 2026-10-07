@@ -41,7 +41,7 @@ void handle_connect(int client_fd, const char *client_ip, const char *target) {
     }
 
     int astatus = 403;
-    if (!access_check(client_ip, host, &astatus)) {
+    if (!access_is_allowed(host)) {
         send_error(client_fd, astatus, astatus == 429 ? "Too Many Requests" : "Forbidden");
         log_request(client_ip, "CONNECT", target, astatus, 0, "BLOCKED", now_ms() - t0);
         return;
