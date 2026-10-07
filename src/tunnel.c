@@ -10,6 +10,7 @@
 #include "proxy.h"
 #include "http.h"
 #include "logger.h"
+#include "access.h"
 
 static double now_ms(void) {
     struct timespec ts;
@@ -36,6 +37,13 @@ void handle_connect(int client_fd, const char *client_ip, const char *target) {
     if (host[0] == '\0' || port <= 0 || port > 65535) {
         send_error(client_fd, 400, "Bad Request");
         log_request(client_ip, "CONNECT", target, 400, 0, "-", now_ms() - t0);
+        return;
+    }
+
+    int astatus = 403;
+    if (!access_check(client_ip, host, &astatus)) {
+        send_error(client_fd, astatus, astatus == 429 ? "Too Many Requests" : "Forbidden");
+        log_request(client_ip, "CONNECT", target, astatus, 0, "BLOCKED", now_ms() - t0);
         return;
     }
 
