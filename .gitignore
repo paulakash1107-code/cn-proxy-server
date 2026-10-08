@@ -19,3 +19,5 @@ bin-release/
 proxy
 tests/echo_server
 proxy_tsan
+logs/
+proxy_release

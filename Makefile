@@ -10,3 +10,6 @@ clean:
 
 tsan: $(SRC)
 	$(CC) -Wall -Wextra -g -pthread -fsanitize=thread -o proxy_tsan $(SRC)
+
+release: $(SRC)
+	$(CC) -O2 -Wall -Wextra -pthread -o proxy_release $(SRC)
