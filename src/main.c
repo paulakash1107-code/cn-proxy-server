@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include "proxy.h"
 #include "http.h"
+#include "access.h"
 
 #define MAX_CLIENTS 200   /* simultaneous connections; beyond this we answer 503 */
 
@@ -39,6 +40,12 @@ static void *thread_main(void *arg) {
 int main(int argc, char **argv) {
     int port = argc > 1 ? atoi(argv[1]) : 8888;
     signal(SIGPIPE, SIG_IGN);       /* don't die when a client disconnects mid-send */
+
+    (void)access_init();
+    /* usage: ./proxy PORT [--block host] [--block host] ... */
+    for (int i = 2; i + 1 < argc; i += 2) {
+        if (strcmp(argv[i], "--block") == 0) access_block_host(argv[i + 1]);
+    }
 
     struct sigaction sa;            /* no SA_RESTART, so accept() returns when Ctrl+C is pressed */
     memset(&sa, 0, sizeof sa);
@@ -102,5 +109,6 @@ int main(int argc, char **argv) {
 
     printf("\nShutting down...\n");
     close(srv);
+    access_destroy();
     return 0;
 }
