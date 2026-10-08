@@ -9,6 +9,7 @@
 #include "proxy.h"
 #include "http.h"
 #include "access.h"
+#include "stats.h"
 
 #define MAX_CLIENTS 200   /* simultaneous connections; beyond this we answer 503 */
 
@@ -108,6 +109,7 @@ int main(int argc, char **argv) {
     }
 
     printf("\nShutting down...\n");
+    stats_print();
     close(srv);
     access_destroy();
     return 0;
