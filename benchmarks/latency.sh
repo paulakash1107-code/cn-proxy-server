@@ -2,7 +2,7 @@
 # Average latency of N sequential requests: direct vs. through the proxy.
 # Needs: ./proxy_release 8888 running, and a web server on port 9000.
 N=${1:-100}
-URL=${2:-http://localhost:9000/}
+URL=${2:-http://127.0.0.1:9001/}
 PROXY=http://localhost:8888
 
 measure() {   # prints the average time_total in milliseconds
