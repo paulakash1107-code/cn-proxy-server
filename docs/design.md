@@ -70,9 +70,45 @@ UBSan (no leaks at exit) and ThreadSanitizer (no data races reported).
 - HTTPS traffic cannot be cached or inspected.
 - Thread-per-connection does not scale like an event loop.
 
-## 7. Caching (Sania)
 
-(to be written by Sania: policy, eviction, TTL rules, trade-offs)
+## 7. Caching (Akash, building on Sania's declarations)
+
+The cache stores complete raw HTTP responses (status line, headers and body) keyed by URL, and
+the proxy answers repeated requests from memory instead of contacting the origin.
+
+**What is cached.** Only GET requests that carry no `Authorization` or `Range` header, and only
+complete `200` responses. Responses with `Set-Cookie`, or `Cache-Control: private`, `no-store` or
+`no-cache`, are never stored. Limits: 2 MB per entry, 20 MB in total.
+
+**Data structure.** A hash table (1024 buckets, djb2 hash, chaining) gives fast lookup by URL.
+A doubly linked list orders entries by last use: the head is the most recently used, the tail
+the next to evict. Both are updated together, so lookups, LRU updates and evictions are O(1)
+in the entry count (apart from walking a hash chain).
+
+**Eviction.** When a new response does not fit, entries are removed from the tail of the list
+until it does. Every hit, refresh or insertion moves the entry to the head.
+
+**Freshness.** The TTL comes from `Cache-Control: max-age`, with a 60 second default when the
+origin gives no hint. `cache_get` returns 1 for a fresh hit, 2 for an expired entry that has an
+ETag (revalidation is possible) and 0 for a miss; an expired entry without an ETag is removed.
+Current limitation: the proxy treats result 2 as a miss and fetches the page again, so
+conditional revalidation with `If-None-Match` / `304 Not Modified` is not implemented yet.
+
+**Thread safety.** The proxy runs one thread per client, so all cache state is protected by
+one global mutex. `cache_get` returns a copy of the stored response, so an entry can be evicted by
+another thread while the first is still sending it to its client. Trade-off: one lock is simple
+and easy to prove correct, but it serialises cache access. Per-bucket locks would scale better.
+
+**Testing.** `tests/test_cache.c` covers LRU eviction, the per-entry size cap, hit, miss,
+replacing an entry, expiry with and without an ETag, `cache_refresh`, and eight threads doing
+16,000 operations at once. It passes under AddressSanitizer, UBSan and ThreadSanitizer. In a
+demo run that requests the same URL repeatedly, the statistics showed 32 hits and 1 miss (97%);
+this is an artificial workload, and a real workload with many distinct URLs would have a
+lower hit ratio.
+
+**Authorship.** The entry struct, hash table and LRU list declarations were written by Sania
+(commit `f1f25a9`). The helper functions, the three cache operations and the unit tests were
+written by Akash.
 
 ## 8. Access control (Tarunima)
 
