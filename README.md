@@ -44,7 +44,7 @@ Or set the browser's HTTP and HTTPS proxy to `localhost` port `8888`.
 
 ## Tests
 
-    ./proxy 8888                      # terminal 1
+    ./proxy 8888                      # terminal 1 (no --config: the rate limit would reject some of the 50 parallel requests)
     ./tests/echo_server               # terminal 2 (build: gcc -o tests/echo_server tests/post_echo_server.c)
     ./tests/robustness.sh             # terminal 3
 
