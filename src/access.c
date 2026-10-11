@@ -176,3 +176,93 @@ void access_destroy(void)
 
     pthread_mutex_unlock(&access_mutex);
 }
+
+/* ---------------- rate limiting: token bucket per client IP ---------------- */
+#include <stdio.h>
+#include <time.h>
+
+#define RL_SLOTS 256
+
+typedef struct {
+    char   ip[46];
+    double tokens;
+    double last;     /* seconds, monotonic clock */
+    int    used;
+} rl_slot;
+
+static rl_slot rl_table[RL_SLOTS];
+static double rl_rate = 0;      /* tokens per second; 0 = limiter disabled */
+static double rl_burst = 0;     /* bucket size */
+static pthread_mutex_t rl_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static double rl_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+void access_set_rate(double per_sec, int burst) {
+    pthread_mutex_lock(&rl_lock);
+    rl_rate = per_sec;
+    rl_burst = burst > 0 ? burst : (per_sec > 1 ? per_sec : 1);
+    memset(rl_table, 0, sizeof rl_table);
+    pthread_mutex_unlock(&rl_lock);
+}
+
+int access_rate_ok(const char *client_ip) {
+    if (!client_ip) return 1;
+    pthread_mutex_lock(&rl_lock);
+    if (rl_rate <= 0) { pthread_mutex_unlock(&rl_lock); return 1; }
+
+    double now = rl_now();
+    unsigned long h = 5381;
+    for (const char *p = client_ip; *p; p++) h = h * 33 + (unsigned char)*p;
+
+    rl_slot *slot = NULL;
+    rl_slot *oldest = &rl_table[h % RL_SLOTS];
+    for (int i = 0; i < RL_SLOTS; i++) {             /* linear probing */
+        rl_slot *s = &rl_table[(h + i) % RL_SLOTS];
+        if (!s->used || strcmp(s->ip, client_ip) == 0) { slot = s; break; }
+        if (s->last < oldest->last) oldest = s;
+    }
+    if (!slot) slot = oldest;                        /* table full: reuse the stalest slot */
+
+    if (!slot->used || strcmp(slot->ip, client_ip) != 0) {   /* new client starts with a full bucket */
+        snprintf(slot->ip, sizeof slot->ip, "%s", client_ip);
+        slot->used = 1;
+        slot->tokens = rl_burst;
+        slot->last = now;
+    }
+
+    slot->tokens += (now - slot->last) * rl_rate;    /* refill for the elapsed time */
+    if (slot->tokens > rl_burst) slot->tokens = rl_burst;
+    slot->last = now;
+
+    int ok = slot->tokens >= 1.0;
+    if (ok) slot->tokens -= 1.0;
+    pthread_mutex_unlock(&rl_lock);
+    return ok;
+}
+
+/* ---------------- config file ---------------- */
+int access_load_config(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[256];
+    int applied = 0;
+    while (fgets(line, sizeof line, f)) {
+        char kw[32], a[128];
+        double b = 0;
+        if (line[0] == '#') continue;
+        int got = sscanf(line, "%31s %127s %lf", kw, a, &b);
+        if (got >= 2 && strcmp(kw, "block") == 0) {
+            access_block_host(a);
+            applied++;
+        } else if (got >= 2 && strcmp(kw, "rate") == 0) {
+            access_set_rate(atof(a), (int)b);
+            applied++;
+        }
+    }
+    fclose(f);
+    return applied;
+}
