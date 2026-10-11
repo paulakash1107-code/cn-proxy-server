@@ -110,9 +110,29 @@ lower hit ratio.
 (commit `f1f25a9`). The helper functions, the three cache operations and the unit tests were
 written by Akash.
 
-## 8. Access control (Tarunima)
+## 8. Access control (blocklist: Tarunima)
 
-(to be written by Tarunima: blocklist, rate limiter, config format, trade-offs)
+**Blocklist.** Blocked hostnames are kept in a mutex-protected list. The check runs before any
+forwarding, for plain HTTP and for CONNECT tunnels, and a blocked host always gets `403 Forbidden`.
+Matching is exact on the hostname (`example.com` does not block `www.example.com`).
+
+**Rate limiter.** A token bucket per client IP. Each bucket holds up to `burst` tokens and refills at
+`rate` tokens per second. Every request takes one token; with none left the proxy answers
+`429 Too Many Requests`. A new client starts with a full bucket. One mutex protects the 256-slot
+table. The limiter is off unless a rate is configured. The blocklist is checked first, so blocked
+requests never use up tokens.
+
+**Config file.** `--config config/proxy.conf` loads `block <host>` and `rate <per_sec> <burst>` lines;
+`#` starts a comment. `--block <host>` adds a single rule from the command line.
+
+**Testing.** `tests/test_access.c` covers the default state, burst and rejection, per-client buckets,
+refill over time, 8 threads sharing one IP, and config loading. It passes under AddressSanitizer/UBSan
+and ThreadSanitizer. In the proxy, 60 parallel requests produced 200s then 429s, `blocked.example` got
+403 over HTTP and CONNECT, and the full proxy under ThreadSanitizer reported no data races.
+
+**Limitations.** Clients are identified by IP, which is unreliable behind NAT. With 256 slots, a flood
+of different IPs can evict old entries. The blocklist matches hostnames, not URL paths, and does not
+match subdomains.
 
 ## 9. Logging, statistics and performance evaluation (Anik)
 
