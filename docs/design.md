@@ -110,6 +110,14 @@ lower hit ratio.
 (commit `f1f25a9`). The helper functions, the three cache operations and the unit tests were
 written by Akash.
 
+**Revalidation (core engine).** When a cached entry has expired but has an ETag, the proxy sends a
+conditional request (`If-None-Match`) to the origin. On `304 Not Modified` it extends the entry's
+lifetime and serves the cached copy, which saves downloading the body again. Otherwise it fetches the
+resource normally. If the resource changed, the origin is contacted twice (once for the check, once
+for the fetch). Tested with a small origin that serves an ETag and honors `If-None-Match`: the proxy
+log showed `MISS`, `HIT`, a revalidated `HIT` after the entry expired, and a `MISS` after the
+resource changed.
+
 ## 8. Access control (blocklist: Tarunima)
 
 **Blocklist.** Blocked hostnames are kept in a mutex-protected list. The check runs before any
