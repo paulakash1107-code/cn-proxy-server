@@ -46,6 +46,7 @@ int main(int argc, char **argv) {
     /* usage: ./proxy PORT [--block host] [--block host] ... */
     for (int i = 2; i + 1 < argc; i += 2) {
         if (strcmp(argv[i], "--block") == 0) access_block_host(argv[i + 1]);
+        else if (strcmp(argv[i], "--config") == 0) access_load_config(argv[i + 1]);
     }
 
     struct sigaction sa;            /* no SA_RESTART, so accept() returns when Ctrl+C is pressed */
