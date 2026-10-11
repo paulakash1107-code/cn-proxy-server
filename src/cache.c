@@ -72,14 +72,68 @@ static void make_room(size_t needed) {
         remove_entry(lru_tail);
 }
 
-/* STUB: owner = Sania. Replace with LRU cache. */
+/* Returns 1 = fresh hit, 2 = stale but revalidatable (has an ETag), 0 = miss. */
 int cache_get(const char *key, char **resp, size_t *len, char *etag_out) {
-    (void)key; (void)resp; (void)len; (void)etag_out;
-    return 0;
+    int result = 0;
+    pthread_mutex_lock(&cache_lock);
+    cache_entry *e = find_entry(key);
+    if (e) {
+        int fresh = time(NULL) < e->expires;
+        if (!fresh && e->etag[0] == '\0') {
+            remove_entry(e);                        /* expired, nothing to revalidate with: drop it */
+        } else {
+            char *copy = malloc(e->len);            /* hand out a copy: the entry may be evicted later */
+            if (copy) {
+                memcpy(copy, e->data, e->len);
+                *resp = copy;
+                *len = e->len;
+                if (etag_out) {
+                    strncpy(etag_out, e->etag, ETAG_MAX - 1);
+                    etag_out[ETAG_MAX - 1] = '\0';
+                }
+                lru_unlink(e);                      /* now the most recently used */
+                lru_push_front(e);
+                result = fresh ? 1 : 2;
+            }
+        }
+    }
+    pthread_mutex_unlock(&cache_lock);
+    return result;
 }
+
 void cache_put(const char *key, const char *resp, size_t len, time_t ttl, const char *etag) {
-    (void)key; (void)resp; (void)len; (void)ttl; (void)etag;
+    if (!key || !resp || len == 0 || len > MAX_ENTRY_BYTES || ttl <= 0) return;
+
+    cache_entry *e = calloc(1, sizeof *e);          /* calloc: etag starts as "" */
+    char *k = strdup(key);
+    char *d = malloc(len);
+    if (!e || !k || !d) { free(e); free(k); free(d); return; }
+    memcpy(d, resp, len);
+    e->key = k;
+    e->data = d;
+    e->len = len;
+    e->expires = time(NULL) + ttl;
+    if (etag) strncpy(e->etag, etag, ETAG_MAX - 1);
+
+    pthread_mutex_lock(&cache_lock);
+    cache_entry *old = find_entry(key);
+    if (old) remove_entry(old);                     /* same URL again: replace the old entry */
+    make_room(len);
+    unsigned long b = hash_key(key) % HASH_BUCKETS;
+    e->hnext = buckets[b];
+    buckets[b] = e;
+    lru_push_front(e);
+    total_bytes += len;
+    pthread_mutex_unlock(&cache_lock);
 }
-void cache_refresh(const char *key, time_t ttl) {
-    (void)key; (void)ttl;
+
+void cache_refresh(const char *key, time_t ttl) {   /* origin answered 304 Not Modified */
+    pthread_mutex_lock(&cache_lock);
+    cache_entry *e = find_entry(key);
+    if (e) {
+        e->expires = time(NULL) + ttl;
+        lru_unlink(e);
+        lru_push_front(e);
+    }
+    pthread_mutex_unlock(&cache_lock);
 }
