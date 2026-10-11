@@ -1,0 +1,66 @@
+507da4b | Sania Das | 2026-10-11 | README: run the robustness suite without --config
+bc67ae4 | Sania Das | 2026-10-11 | document cache revalidation in design doc
+7de0053 | Sania Das | 2026-10-11 | revalidate stale cache entries with If-None-Match and serve the cached copy on 304
+f25bd89 | Akash Paul | 2026-10-11 | Merge pull request #5 from paulakash1107-code/feature/core
+9d60fdf | Sania Das | 2026-10-11 | demo: fresh URL for the cache step, add rate limit step with refill pause
+7a9eaa9 | Sania Das | 2026-10-11 | benchmarks: cold vs warm cache results, update design doc section 9
+f94be2e | Sania Das | 2026-10-11 | benchmarks: use 127.0.0.1 for the proxy, allow URL argument
+1dce7d4 | Sania Das | 2026-10-11 | write access control section of design doc
+43accda | Sania Das | 2026-10-11 | check blocklist before rate limit so blocked hosts always get 403
+407c91f | Sania Das | 2026-10-11 | Merge feature/access-ratelimit: per-client rate limiter and config loader
+9f86a6a | Sania Das | 2026-10-11 | add access control tests: rate limiter, burst, refill, threads, config loading
+e7a9b4c | Sania Das | 2026-10-11 | enforce rate limit (429) in proxy and tunnel, add --config option and sample config
+6186d89 | Sania Das | 2026-10-11 | add per-client token bucket rate limiter and config file loader
+34d7410 | Sania Das | 2026-10-11 | declare rate limiter and config loader in access.h
+743cd20 | Sania Das | 2026-10-11 | Merge docs/cache-section: caching section of design doc
+ec992ff | Sania Das | 2026-10-11 | write caching section of design doc
+6d4d858 | Akash Paul | 2026-10-11 | Merge pull request #4 from paulakash1107-code/feature/cache
+f9bb5de | Sania Das | 2026-10-11 | add cache unit tests: LRU eviction, size cap, hit, miss, replace, expiry, refresh, threads
+1de38b8 | Sania Das | 2026-10-11 | implement cache_get, cache_put and cache_refresh with LRU eviction and mutex
+f819c70 | Sania Das | 2026-10-11 | add hash, LRU list and eviction helpers for the cache
+f1f25a9 | Sania Das | 2026-10-09 | add cache entry struct, hash table and LRU list declarations
+70ec552 | anikghosh983-ui | 2026-10-08 | Merge pull request #3 from paulakash1107-code/feature/logging
+8f05f22 | ANIK | 2026-10-08 | write logging, stats and performance evaluation section of design doc
+ff65927 | ANIK | 2026-10-08 | benchmarks: use 127.0.0.1 and the C echo server as origin (python server backlog too small)
+5accc4d | ANIK | 2026-10-08 | add throughput and concurrency benchmark script (ab)
+c202b37 | ANIK | 2026-10-08 | add latency benchmark script (direct vs proxy)
+1eb88a8 | ANIK | 2026-10-08 | add make release target for benchmarking without sanitizers
+7c5510f | ANIK | 2026-10-08 | implement mutex-protected stats counters and shutdown summary
+5b14502 | ANIK | 2026-10-08 | ignore logs directory
+39c742b | ANIK | 2026-10-08 | implement thread-safe logger with timestamps, file and terminal output
+2cb10fa | Akash Akash Paul | 2026-10-08 | Merge feature/core: stats interface stub for Anik's module
+2a07628 | Akash Akash Paul | 2026-10-08 | print stats summary at shutdown
+243b15a | Akash Akash Paul | 2026-10-08 | add stats interface and stub for the logging/stats module
+749fb29 | Akash Akash Paul | 2026-10-08 | add live demo script covering forwarding, cache, blocking, HTTPS, errors and concurrency
+e471293 | Akash Paul | 2026-10-08 | Merge pull request #2 from paulakash1107-code/feature/core
+7e6dc1b | Akash Akash Paul | 2026-10-08 | write design doc sections for core engine; add placeholders for other modules
+0a489c0 | Akash Akash Paul | 2026-10-08 | write README with build, run, test and module ownership
+b837150 | Akash Akash Paul | 2026-10-07 | initialise access control at startup, add --block option, free on shutdown
+60d20fc | Akash Akash Paul | 2026-10-07 | adapt to new access control interface: use access_is_allowed(host)
+9f39f00 | Akash Paul | 2026-10-07 | Merge pull request #1 from paulakash1107-code/feature/core
+34aeac6 | Akash Akash Paul | 2026-10-07 | add make tsan target for ThreadSanitizer builds
+9255083 | Akash Akash Paul | 2026-10-07 | shut down cleanly on SIGINT/SIGTERM so the leak checker can report
+3bb3394 | Akash Akash Paul | 2026-10-07 | add robustness test script: malformed, oversized, unreachable, concurrent, slow origin
+4cb49c7 | Akash Akash Paul | 2026-10-07 | raise echo server listen backlog for concurrency tests
+b9c9794 | Akash Akash Paul | 2026-10-07 | limit simultaneous clients to 200 and answer 503 when overloaded
+3ef71b3 | Akash Akash Paul | 2026-10-07 | reply 431 when request headers exceed the buffer
+fd837e5 | Akash Akash Paul | 2026-10-07 | integrate access check, cache lookup and response capture into the HTTP flow
+c7a4dcf | Akash Akash Paul | 2026-10-07 | call access_check before opening CONNECT tunnels
+cc4c55c | Akash Akash Paul | 2026-10-07 | replace Python test server with a C POST echo server
+bcf43e2 | Akash Akash Paul | 2026-10-07 | forward request bodies for POST/PUT using Content-Length, reject oversized or chunked
+33b7c35 | Akash Akash Paul | 2026-10-07 | add local POST echo server for testing
+cbcb17c | tarunimabhowmick-cmyk | 2026-10-07 | Implement access control with blocklist and mutex
+f6a3f9e | tarunimabhowmick-cmyk | 2026-10-07 | Refactor access control functions in access.h
+0349544 | Akash Akash Paul | 2026-10-06 | route CONNECT requests to the tunnel handler
+871a3fb | Akash Akash Paul | 2026-10-06 | add CONNECT tunneling module for HTTPS
+248a7ce | Akash Akash Paul | 2026-10-06 | implement HTTP forwarding: connect to origin, rewrite headers, relay response
+5ee1df5 | Akash Akash Paul | 2026-10-06 | parse request line and URL in handle_client (echo only)
+68b628c | Akash Akash Paul | 2026-10-06 | add http helpers: read_headers, parse_url, send_all, send_error
+25512af | Akash Akash Paul | 2026-10-06 | add temporary handle_client placeholder
+bcc17ca | Akash Akash Paul | 2026-10-06 | add TCP listener, accept loop and thread per client in main.c
+fef6c60 | Akash Akash Paul | 2026-10-06 | add stub modules so the project compiles
+18b8693 | Akash Akash Paul | 2026-10-06 | add proxy and http helper headers
+995170f | Akash Akash Paul | 2026-10-06 | add interface headers for cache, access control and logger
+3f66209 | Akash Akash Paul | 2026-10-06 | add Makefile with sanitizer flags
+a381c1f | Akash Akash Paul | 2026-10-06 | add project folder structure
+128764a | Akash Paul | 2026-10-07 | Initial commit
