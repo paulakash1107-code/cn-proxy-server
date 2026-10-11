@@ -189,6 +189,41 @@ static size_t relay_response(int ofd, int cfd, int *status,
     return total;
 }
 
+/* Conditional GET for a stale cache entry.
+   Returns 1 = origin said 304 Not Modified, 0 = anything else, -1 = error. */
+static int revalidate(const char *host, int port, const char *path,
+                      const char *etag, char *head, size_t headsz) {
+    int fd = connect_to_host(host, port);
+    if (fd < 0) return -1;
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    char hostport[300];
+    if (port == 80) snprintf(hostport, sizeof hostport, "%s", host);
+    else snprintf(hostport, sizeof hostport, "%s:%d", host, port);
+    char req[2048];
+    int rl = snprintf(req, sizeof req,
+        "GET %s HTTP/1.1\r\nHost: %s\r\nIf-None-Match: %s\r\n"
+        "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, hostport, etag);
+    if (rl <= 0 || rl >= (int)sizeof req || send_all(fd, req, (size_t)rl) < 0) {
+        close(fd);
+        return -1;
+    }
+    size_t got = 0;
+    head[0] = '\0';
+    while (got < headsz - 1) {
+        ssize_t r = recv(fd, head + got, headsz - 1 - got, 0);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        head[got] = '\0';
+        if (strstr(head, "\r\n\r\n")) break;
+    }
+    close(fd);
+    if (got < 12) return -1;
+    return strncmp(head + 8, " 304", 4) == 0;
+}
+
 void handle_client(int client_fd, const char *client_ip) {
     double t0 = now_ms();
     char buf[8192];
@@ -245,7 +280,24 @@ void handle_client(int client_fd, const char *client_ip) {
             log_request(client_ip, method, url, 200, cached_len, "HIT", now_ms() - t0);
             return;
         }
-        if (cr == 2) free(cached);               /* stale: treated as a miss for now */
+        if (cr == 2) {                           /* stale: ask the origin if it changed */
+            char head[4096];
+            int rv = etag[0] ? revalidate(host, port, path, etag, head, sizeof head) : 0;
+            if (rv == 1) {                       /* 304 Not Modified: reuse the cached copy */
+                long ttl = response_ttl(head);
+                if (ttl <= 0) {
+                    char *t = realloc(cached, cached_len + 1);
+                    if (t) { cached = t; cached[cached_len] = '\0'; ttl = response_ttl(cached); }
+                }
+                if (ttl <= 0) ttl = 60;
+                cache_refresh(url, (time_t)ttl);
+                send_all(client_fd, cached, cached_len);
+                free(cached);
+                log_request(client_ip, method, url, 200, cached_len, "HIT", now_ms() - t0);
+                return;
+            }
+            free(cached);                        /* changed or unreachable: normal fetch below */
+        }
     }
 
     long clen = get_content_length(buf);
