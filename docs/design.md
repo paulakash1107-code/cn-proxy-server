@@ -190,20 +190,28 @@ To keep the comparison fair:
 - The origin is the small C server `tests/echo_server`, running locally, so internet latency and
   DNS do not affect the results.
 - All tests use `127.0.0.1` rather than `localhost` (see 9.5).
+- The proxy's terminal output is discarded (`./proxy_release 8888 > /dev/null`); the log file
+  `logs/proxy.log` is still written. Printing one line per request to a terminal would slow it down.
+- Cold-cache runs send a `Range: bytes=0-` header, which the proxy does not cache, so every request
+  reaches the origin. Warm-cache runs repeat a plain GET, so all but the first request are cache hits.
 
-### 9.4 Results (cold cache, localhost, tiny response)
+### 9.4 Results (localhost, tiny response)
 
-| Metric | Direct | Via proxy |
-|---|---|---|
-| Average latency (100 sequential requests) | 0.45 ms | 1.09 ms |
-| Throughput (2000 requests, 50 concurrent) | 11,328 req/s | 5,622 req/s |
-| Mean time per request (50 concurrent) | 4.4 ms | 8.9 ms |
-| Failed requests | 0 | 0 |
+| Metric | Direct | Via proxy, cold cache | Via proxy, warm cache |
+|---|---|---|---|
+| Average latency (100 sequential requests) | 0.28 ms | 0.57 ms | 0.39 ms |
+| Throughput (2000 requests, 50 concurrent) | 18,547 req/s | 10,710 req/s | 13,757 req/s |
+| Mean time per request (50 concurrent) | 2.70 ms | 4.67 ms | 3.64 ms |
+| Failed requests | 0 | 0 | 0 |
 
-Warm-cache results: (to be added after the cache module is merged)
+In the cold runs every request bypassed the cache, so each one went to the origin. In the warm runs
+the same URL was requested repeatedly: the proxy statistics show 2099 cache hits and 1 miss out of
+2100 requests (100% hit ratio).
 
-The proxy adds about 0.6 ms per request and reaches roughly half the direct throughput, with no
-failed requests under 50 concurrent clients.
+Without the cache the proxy adds about 0.29 ms per request and reaches about 58% of the direct
+throughput. With a warm cache it adds about 0.11 ms and reaches about 74%. The cache raises
+throughput by about 28% and cuts average latency by about 32% compared with the cold run, with no
+failed requests under 50 concurrent clients. Results vary by a few percent between runs.
 
 ### 9.5 Measurement lessons
 
@@ -231,3 +239,11 @@ fraction of the total.
 Ways to reduce it: serving repeated requests from the cache (removes the origin trip entirely),
 reusing connections to origins (keep-alive), a thread pool instead of a thread per request, or an
 `epoll`-based event loop.
+
+**Effect of the cache.** With the cache active, repeated requests are answered from memory without
+opening a connection to the origin. On this setup that raised throughput from 10,710 to 13,757 req/s
+(+28%) and cut average latency from 0.57 ms to 0.39 ms (-32%), even though the origin is a local C
+server that replies in microseconds. The gain would be much larger with a real remote origin, where
+each avoided round trip saves tens or hundreds of milliseconds. A warm cache still does not reach
+direct speed on localhost, because the proxy still parses the request, takes the cache lock, starts
+a thread and writes a log line for every request.
