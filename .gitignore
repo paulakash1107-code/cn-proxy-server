@@ -23,3 +23,5 @@ logs/
 proxy_release
 tests/test_cache
 tests/test_cache_tsan
+tests/test_access
+tests/test_access_tsan
