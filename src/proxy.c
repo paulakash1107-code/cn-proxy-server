@@ -221,8 +221,10 @@ void handle_client(int client_fd, const char *client_ip) {
 
     /* Access control: blocklist / rate limit. */
     int astatus = 403;
-    if (!access_rate_ok(client_ip)) astatus = 429;
-    if (astatus == 429 || !access_is_allowed(host)) {
+    if (!access_is_allowed(host)) astatus = 403;
+    else if (!access_rate_ok(client_ip)) astatus = 429;
+    else astatus = 0;
+    if (astatus) {
         send_error(client_fd, astatus, astatus == 429 ? "Too Many Requests" : "Forbidden");
         log_request(client_ip, method, url, astatus, 0, "BLOCKED", now_ms() - t0);
         return;
